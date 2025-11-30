@@ -20,14 +20,8 @@ cv::Mat loadImage(const std::string& path) {
     return img;
 }
 
-// --- Contador global de comparações da MTree ---
-static size_t MTREE_COMPARISONS = 0;
-
-// Redefina a função de distância da MTree incrementando o contador
-float mtree_distance_counted(const MTreeObject& a, const MTreeObject& b) {
-    MTREE_COMPARISONS++;
-    return mtree_distance(a, b); // usa sua métrica real
-}
+// Definição do contador global (referenciado em MTreeObject.hpp)
+size_t MTREE_COMPARISONS = 0;
 
 
 // --- Busca usando MTree ---
@@ -43,7 +37,6 @@ void runMtree(const std::string& queryPath, int K) {
         if (!entry.is_regular_file()) continue;
 
         std::string fpath = entry.path().string();
-        std::cout << "  Loading: " << fpath << std::endl;
 
         cv::Mat img = loadImage(fpath);
         if (img.empty()) {
@@ -76,7 +69,7 @@ void runMtree(const std::string& queryPath, int K) {
     Descriptor dq = computeDescriptor(qimg);
     MTreeObject qobj(999999, dq);
 
-    // Zera contador
+    // Zera contador apenas para a fase de consulta (comparações de construção já aconteceram)
     MTREE_COMPARISONS = 0;
 
     // Executa KNN

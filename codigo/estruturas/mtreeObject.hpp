@@ -7,6 +7,9 @@
 
 using namespace std;
 
+// Contador de comparações usado pela M-Tree (definido em main.cpp)
+extern size_t MTREE_COMPARISONS;
+
 // Wrapper para armazenar no M-Tree
 struct MTreeObject {
     Descriptor desc;
@@ -27,15 +30,16 @@ inline float circular_dist(float a, float b) {
 // função de distância combinada (métrica usada pela M-Tree)
 // Combina Chi^2(hist), distância circular do hue médio (muH) e diferença de saturação média (muS).
 inline float mtree_distance(const MTreeObject& A, const MTreeObject& B) {
+    // Incrementa contador global de comparações
+    ++MTREE_COMPARISONS;
+
     float d_hist = chi2_distance(A.desc.hist, B.desc.hist);
     float d_hue  = circular_dist(A.desc.muH, B.desc.muH);
     float d_sat  = fabs(A.desc.muS - B.desc.muS);
 
-    // Pesos ajustáveis
     const float W_HIST = 1.0f;
     const float W_HUE  = 0.5f;
     const float W_SAT  = 0.25f;
-
     return W_HIST * d_hist + W_HUE * d_hue + W_SAT * d_sat;
 }
 

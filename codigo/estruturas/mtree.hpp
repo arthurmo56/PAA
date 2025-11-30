@@ -11,6 +11,8 @@
 #include <optional>
 #include <cassert>
 #include <iostream>
+#include <atomic>
+#define MTREE_DEBUG 0
 
 using namespace std;
 
@@ -61,11 +63,20 @@ public:
 
     shared_ptr<Node> root;
 
+    // Instrumentação opcional (contadores globais de nós e splits)
+    static atomic<size_t> NODE_INSTANCES; // número total aproximado de nós vivos/criados
+    static atomic<size_t> SPLIT_COUNT;    // número de splits executados
+
+    // Stubs de debug (desativados quando MTREE_DEBUG=0)
+    static void debug_print_counters() {}
+    static void debug_validate_tree(const shared_ptr<Node>&) {}
+
     MTree(size_t maxEntries = 50)
     {
         M = maxEntries;
         m = max((size_t)2, maxEntries / 2);
         root = make_shared<Node>(true);
+        NODE_INSTANCES.fetch_add(1, memory_order_relaxed);
     }
 
     void insert(const MTreeObject &obj)
@@ -269,6 +280,7 @@ private:
 
     void insertRecursive(const shared_ptr<Node> &node, const MTreeObject &obj)
     {
+    // Debug desativado
         if (node->isLeaf)
         {
             // create leaf entry
@@ -294,14 +306,19 @@ private:
         size_t bestIdx = chooseSubtree(node, obj);
         assert(bestIdx < node->entries.size());
         auto child = node->entries[bestIdx].child;
-        insertRecursive(child, obj);
-
-        // after insertion, maybe child split changed structure; handle if child's size > M
-        if (child->entries.size() > M)
-            handleOverflow(child);
+        insertRecursive(child, obj); // splits e propagação já tratados recursivamente
 
         // ensure covering radius of the chosen entry updated
-        node->entries[bestIdx].radius = computeCoveringRadius(node->entries[bestIdx]);
+        // O filho pode ter sido dividido e o entry original removido.
+        // Em vez de acessar diretamente pelo índice salvo, buscamos o entry que aponta para 'child'.
+        for (auto &ent : node->entries) {
+            if (ent.child == child) {
+                // debug desativado
+                ent.radius = computeCoveringRadius(ent);
+                break;
+            }
+        }
+    // debug desativado
     }
 
     // choose subtree entry index minimizing increase in covering radius
@@ -346,6 +363,7 @@ private:
         {
             for (auto &ent : node->entries)
             {
+                // debug desativado
                 float d = safe_dist(pivot, ent.routingObj);
                 if (d > maxD)
                     maxD = d;
@@ -356,6 +374,7 @@ private:
         {
             for (auto &ent : node->entries)
             {
+                // debug desativado
                 // distance from pivot to child's routingObj plus child's radius may give upper bound,
                 // but here we compute exact by exploring downwards for correctness.
                 float d = safe_dist(pivot, ent.routingObj);
@@ -450,9 +469,15 @@ private:
         n1->parent = parent;
         n2->parent = parent;
 
-        // insert and possibly adjust order
-        parent->entries.push_back(e1);
-        parent->entries.push_back(e2);
+    // insert novas entradas
+    parent->entries.push_back(e1);
+    parent->entries.push_back(e2);
+
+#ifdef MTREE_RECALC_PARENT_AFTER_SPLIT
+    // Recalcula todos os raios do parent para consistência total (custo extra)
+    for (auto &ent : parent->entries)
+        ent.radius = computeCoveringRadius(ent);
+#endif
 
         // if parent now overflow, handle recursively
         if (parent->entries.size() > M)
@@ -466,6 +491,7 @@ private:
         vector<Entry> all = node->entries;
         size_t n = all.size();
         assert(n >= 2);
+        assert(n == M + 1 || n > M); // overflow esperado
 
         // (1) Escolhe par mais distante (farthest-pair)
         float maxD = -1.0f;
@@ -486,8 +512,12 @@ private:
         }
 
         // (2) Cria os novos nós (preservando leafness)
-        auto nodeA = make_shared<Node>(node->isLeaf);
-        auto nodeB = make_shared<Node>(node->isLeaf);
+    auto nodeA = make_shared<Node>(node->isLeaf);
+    auto nodeB = make_shared<Node>(node->isLeaf);
+    NODE_INSTANCES.fetch_add(2, memory_order_relaxed);
+    SPLIT_COUNT.fetch_add(1, memory_order_relaxed);
+    nodeA->entries.reserve(n); // reserva máxima possível
+    nodeB->entries.reserve(n);
 
         // Copia o parent para os novos nós
         auto parent = node->parent.lock();
@@ -495,8 +525,8 @@ private:
         nodeB->parent = parent;
 
         // (3) Seeds promovidos
-        Entry seedA = all[a];
-        Entry seedB = all[b];
+    Entry seedA = std::move(all[a]);
+    Entry seedB = std::move(all[b]);
 
         // Seeds podem ser entradas de folha ou não.
         // Se não for folha, preserva filho corretamente.
@@ -507,8 +537,8 @@ private:
         }
 
         // Inserir seeds como primeiras entradas
-        nodeA->entries.push_back(seedA);
-        nodeB->entries.push_back(seedB);
+    nodeA->entries.push_back(std::move(seedA));
+    nodeB->entries.push_back(std::move(seedB));
 
         // (4) Marcar entradas já usadas
         vector<bool> assigned(n, false);
@@ -521,13 +551,13 @@ private:
             if (assigned[i])
                 continue;
 
-            float dA = safe_dist(all[i].routingObj, seedA.routingObj);
-            float dB = safe_dist(all[i].routingObj, seedB.routingObj);
+            float dA = safe_dist(all[i].routingObj, nodeA->entries[0].routingObj);
+            float dB = safe_dist(all[i].routingObj, nodeB->entries[0].routingObj);
 
             if (dA < dB)
-                nodeA->entries.push_back(all[i]);
+                nodeA->entries.push_back(std::move(all[i]));
             else
-                nodeB->entries.push_back(all[i]);
+                nodeB->entries.push_back(std::move(all[i]));
 
             assigned[i] = true;
         }
@@ -535,12 +565,18 @@ private:
         // (6) Ensure min-fill (corrige desbalanceamento)
         if (nodeA->entries.size() < m)
         {
-            moveEntriesToFill(nodeB, nodeA, m - nodeA->entries.size(), seedA.routingObj);
+            moveEntriesToFill(nodeB, nodeA, m - nodeA->entries.size(), nodeA->entries[0].routingObj);
         }
         else if (nodeB->entries.size() < m)
         {
-            moveEntriesToFill(nodeA, nodeB, m - nodeB->entries.size(), seedB.routingObj);
+            moveEntriesToFill(nodeA, nodeB, m - nodeB->entries.size(), nodeB->entries[0].routingObj);
         }
+
+        // Log básico de split (pode ficar verboso se muitos splits)
+    // log de split desativado
+
+        // Validação rápida dos hist sizes (invariantes)
+        // validação desativada
 
         // (7) Se o nó não for folha, atualiza parents dos filhos
         if (!node->isLeaf)
@@ -571,6 +607,11 @@ private:
             float dist;
         };
         vector<Item> items;
+        items.reserve(src->entries.size());
+        if (count == 0 || src->entries.empty())
+            return;
+        if (count > src->entries.size())
+            count = src->entries.size(); // proteção
         for (size_t i = 0; i < src->entries.size(); ++i)
         {
             items.push_back({i, safe_dist(src->entries[i].routingObj, dstPivot)});
@@ -584,7 +625,7 @@ private:
         {
             if (moved >= count)
                 break;
-            dst->entries.push_back(src->entries[it.idx]);
+            dst->entries.push_back(std::move(src->entries[it.idx]));
             moved++;
         }
         // remove moved entries from src (by rebuilding vector except moved indices)
@@ -594,8 +635,11 @@ private:
             movedIdx[items[i].idx] = true;
         for (size_t i = 0; i < src->entries.size(); ++i)
             if (!movedIdx[i])
-                remaining.push_back(src->entries[i]);
+                remaining.push_back(std::move(src->entries[i]));
         src->entries.swap(remaining);
+
+        // Verificação pós-move
+        // pós-move debug desativado
     }
 
     // ------------------- RANGE -------------------
@@ -689,5 +733,9 @@ private:
             collectLeafObjects(e.child, out);
     }
 };
+
+// Definições inline dos membros estáticos (C++17 inline variable evita múltiplas definições)
+inline atomic<size_t> MTree::NODE_INSTANCES{0};
+inline atomic<size_t> MTree::SPLIT_COUNT{0};
 
 #endif // MTREE_HPP

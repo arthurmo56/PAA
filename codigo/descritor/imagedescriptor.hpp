@@ -67,18 +67,24 @@ Descriptor computeDescriptor(const cv::Mat& image) {
 }
 
 inline float chi2_distance(const std::vector<float>& hist1, const std::vector<float>& hist2) {
+    // Tornar robusto contra tamanhos diferentes (não deveria acontecer).
+    // Se houver mismatch, usar min-size e emitir aviso (uma única vez).
+    static bool warnedMismatch = false;
+    size_t n1 = hist1.size();
+    size_t n2 = hist2.size();
+    size_t n = std::min(n1, n2);
+    if (n1 != n2 && !warnedMismatch) {
+        std::cerr << "[WARN] chi2_distance tamanho diferente: hist1=" << n1 << " hist2=" << n2 << " usando min=" << n << "\n";
+        warnedMismatch = true;
+    }
     float dist = 0.0f;
-    // Assumindo que os vetores têm o mesmo tamanho e que o tamanho é > 0
-    for (size_t i = 0; i < hist1.size(); ++i) {
+    for (size_t i = 0; i < n; ++i) {
         float num = hist1[i] - hist2[i];
         float den = hist1[i] + hist2[i];
-        
-        // Evita divisão por zero e NaN. Se a soma dos bins for 0, a contribuição é 0.
-        if (den > 1e-6) {
+        if (den > 1e-6f) {
             dist += (num * num) / den;
         }
     }
-    // A distância Chi-Quadrado tem um fator de 1/2.
     return 0.5f * dist;
 }
 
