@@ -20,48 +20,76 @@ cv::Mat loadImage(const std::string& path) {
     return img;
 }
 
-// --- Busca com Mtree ---
+// --- Contador global de comparações da MTree ---
+static size_t MTREE_COMPARISONS = 0;
+
+// Redefina a função de distância da MTree incrementando o contador
+float mtree_distance_counted(const MTreeObject& a, const MTreeObject& b) {
+    MTREE_COMPARISONS++;
+    return mtree_distance(a, b); // usa sua métrica real
+}
+
+
+// --- Busca usando MTree ---
 void runMtree(const std::string& queryPath, int K) {
-    Rect boundary{0.5f, 0.5f, 0.5f, 0.5f};
-    Quadtree qt(boundary, 4);
+    std::cout << "\nConstruindo MTree...\n";
 
+    MTree tree;
+
+    // Inserir todas as imagens da pasta
+    int currentID = 0;
+    int inserted = 0;
     for (const auto& entry : fs::directory_iterator("images")) {
-        if (entry.is_regular_file()) {
-            cv::Mat img = loadImage(entry.path().string());
-            if (img.empty()) continue;
+        if (!entry.is_regular_file()) continue;
 
-            Descriptor d = computeDescriptor(img);
-            Record r{0, entry.path().string(), d.hist, d.muH, d.muS};
-            Point p{d.muH, d.muS, r};
-            qt.insert(p);
+        std::string fpath = entry.path().string();
+        std::cout << "  Loading: " << fpath << std::endl;
+
+        cv::Mat img = loadImage(fpath);
+        if (img.empty()) {
+            std::cout << "    -> Skipped (cannot open/empty)\n";
+            continue;
+        }
+
+        Descriptor d = computeDescriptor(img);
+
+        MTreeObject obj(currentID++, d, fpath);
+
+        try {
+            tree.insert(obj);
+            inserted++;
+            std::cout << "    -> Inserted id=" << obj.id << "\n";
+        } catch (const std::exception &ex) {
+            std::cerr << "Exception during insert of " << fpath << " : " << ex.what() << std::endl;
+            throw; // rethrow to keep behavior, but print location
         }
     }
+    std::cout << "  Total inserted: " << inserted << "\n";
 
+    // Processar imagem query
     cv::Mat qimg = loadImage(queryPath);
-    if (qimg.empty()) return;
+    if (qimg.empty()) {
+        std::cerr << "Erro ao carregar query.\n";
+        return;
+    }
 
     Descriptor dq = computeDescriptor(qimg);
-    Record rq{0, queryPath, dq.hist, dq.muH, dq.muS};
-    Point qpoint{dq.muH, dq.muS, rq};
+    MTreeObject qobj(999999, dq);
 
-    float radius = 0.2f; // aumentar raio para pegar mais candidatos
-    Rect range{qpoint.x, qpoint.y, radius, radius};
-    std::vector<Point> candidates;
-    qt.queryRange(range, candidates);
+    // Zera contador
+    MTREE_COMPARISONS = 0;
 
-    std::vector<std::pair<float, Record>> dists;
-    for (auto& p : candidates) {
-        float d = chi2_distance(rq.hist, p.record.hist);
-        dists.push_back({d, p.record});
+    // Executa KNN
+    auto results = tree.knn(qobj, K);
+
+    std::cout << "\nResultados (MTree):\n";
+    for (auto& p : results) {
+        std::cout << p.first.filepath << "  (dist = " << p.second << ")\n";
     }
-    std::sort(dists.begin(), dists.end(),
-              [](auto& a, auto& b) { return a.first < b.first; });
 
-    std::cout << "Resultados (Quadtree):\n";
-    for (int i = 0; i < K && i < (int)dists.size(); i++) {
-        std::cout << dists[i].second.filepath << "\n";
-    }
+    std::cout << "Comparações: " << MTREE_COMPARISONS << "\n";
 }
+
 
 // --- Busca com Hash LSH ---
 void runHashLSH(const std::string& queryPath, int K) {
