@@ -1,5 +1,6 @@
 #pragma once
 #include "../descritor/imagedescriptor.hpp"
+#include "../descritor/descritor.hpp"
 #include <unordered_map>
 #include <string>
 #include <vector>
