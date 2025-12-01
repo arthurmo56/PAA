@@ -54,7 +54,7 @@ void runMtree(const std::string& queryPath, int K) {
             std::cout << "    -> Inserted id=" << obj.id << "\n";
         } catch (const std::exception &ex) {
             std::cerr << "Exception during insert of " << fpath << " : " << ex.what() << std::endl;
-            throw; // rethrow to keep behavior, but print location
+            throw; // rethrow para manter o comportamento, mas printa o erro
         }
     }
     std::cout << "  Total inserted: " << inserted << "\n";
@@ -69,7 +69,7 @@ void runMtree(const std::string& queryPath, int K) {
     Descriptor dq = computeDescriptor(qimg);
     MTreeObject qobj(999999, dq);
 
-    // Zera contador apenas para a fase de consulta (comparações de construção já aconteceram)
+    // Zera contador apenas para a fase de consulta
     MTREE_COMPARISONS = 0;
 
     // Executa KNN

@@ -16,14 +16,12 @@
 
 using namespace std;
 
-/*
-  Implementação de M-Tree:
-  - NodeEntry: representa uma entrada em um nó (pode apontar para child ou ser folha com objeto)
-  - Node: tem várias entradas
-  - Inserção: chooseSubtree (min expand), inserir em folha, split quando overflow (promote por farthest-pair)
-  - Range query e k-NN (best-first)
-  - Remoção: remove e reinserção das entradas órfãs (reinsert strategy)
-*/
+// Implementação de M-Tree (estrutura métrica para buscas por similaridade)
+// Conceitos principais:
+// - Entry: entrada de nó (pode ser objeto folha ou apontar para um filho).
+// - Node: nó da árvore (folha ou interno) contendo várias entries.
+// - Inserção: escolhe subárvore com menor expansão; divide nó ao ultrapassar M.
+// - Consulta: range query e k-NN com poda por limites inferiores (LB).
 
 class MTree
 {
@@ -31,20 +29,19 @@ public:
     struct Node;
     struct Entry
     {
-        // routing object (pivot) stored here
+        // Objeto usado como pivô no nó
         MTreeObject routingObj;
 
-        // se apontar para filho
+        // Ponteiro para nó filho ou nulo (folha)
         shared_ptr<Node> child = nullptr;
 
-        // covering radius: máximo d(routingObj, any object in child subtree)
+        // Raio de cobertura
         float radius = 0.0f;
 
-        // distância do routingObj ao pivot do nó pai (útil para persistência). Aqui usamos 0 se root.
+        // Distância ao pivô do nó pai (0 para a raiz)
         float distToParent = 0.0f;
 
-        // se child == nullptr então esta entry representa um objeto folha,
-        // e routingObj é o próprio objeto armazenado na folha.
+        // child == nullptr indica entrada de folha, routingObj é o próprio objeto
         bool isLeafEntry() const { return child == nullptr; }
     };
 
@@ -57,19 +54,15 @@ public:
         Node(bool leaf = true) : isLeaf(leaf) {}
     };
 
-    // Configuração
-    size_t M = 50; // capacidade máxima (ajuste conforme trabalho)
-    size_t m = 25; // mínimo (normalmente M/2)
+    // Parâmetros do nó
+    size_t M = 50; // capacidade máxima
+    size_t m = 25; // preenchimento mínimo (≈ M/2)
 
     shared_ptr<Node> root;
 
-    // Instrumentação opcional (contadores globais de nós e splits)
-    static atomic<size_t> NODE_INSTANCES; // número total aproximado de nós vivos/criados
-    static atomic<size_t> SPLIT_COUNT;    // número de splits executados
-
-    // Stubs de debug (desativados quando MTREE_DEBUG=0)
-    static void debug_print_counters() {}
-    static void debug_validate_tree(const shared_ptr<Node>&) {}
+    // Instrumentação
+    static atomic<size_t> NODE_INSTANCES; // nós criados
+    static atomic<size_t> SPLIT_COUNT;    // splits realizados
 
     MTree(size_t maxEntries = 50)
     {
@@ -104,7 +97,6 @@ public:
         };
         priority_queue<ResultElem, vector<ResultElem>, ResCmp> results;
 
-        // push root children
         pushNodeEntriesToPQ(root, query, pq);
 
         while (!pq.empty())
@@ -154,10 +146,9 @@ public:
         return out;
     }
 
-    // Remoção (remove objeto exatamente com same id)
+    // Remoção
     bool remove(int objectId)
     {
-        // find leaf entry containing id
         auto [node, idx] = findLeafEntry(root, objectId);
         if (!node)
             return false;
@@ -165,12 +156,11 @@ public:
         MTreeObject orphan = node->entries[idx].routingObj;
         node->entries.erase(node->entries.begin() + idx);
 
-        // If underflow, collect orphaned entries and reinsert
         handleUnderflow(node);
         return true;
     }
 
-    // Debug: print structure (counts)
+    // Estatísticas para debug
     void debug_print_stats()
     {
         int height = computeHeight(root);
@@ -189,7 +179,7 @@ private:
         return mtree_distance(a, b);
     }
 
-    // ---------------- PQ TYPES --------------------------------------------------
+    // ---------------- Tipos da fila de prioridade ----------------
 
     using PQEntry = pair<float, pair<shared_ptr<Node>, size_t>>;
 
@@ -203,7 +193,7 @@ private:
 
     using PQ = priority_queue<PQEntry, vector<PQEntry>, PQCompare>;
 
-    // --------------- pushNodeEntriesToPQ ----------------------
+    // Empilha as entradas do nó na PQ com seus limites inferiores
 
     void pushNodeEntriesToPQ(const shared_ptr<Node> &node,
                              const MTreeObject &query,
@@ -220,7 +210,7 @@ private:
         }
     }
 
-    // compute height (root = 1)
+    // Altura da árvore (raiz = 1)
     int computeHeight(const shared_ptr<Node> &node)
     {
         if (!node)
@@ -251,7 +241,7 @@ private:
                 collectStats(e.child, nodes, leaves, entries);
     }
 
-    // find leaf entry with objectId. returns node shared_ptr and index in node->entries
+    // Procura entrada de folha com objectId retorna nó e índice
     pair<shared_ptr<Node>, int> findLeafEntry(const shared_ptr<Node> &node, int objectId)
     {
         if (!node)
@@ -263,7 +253,7 @@ private:
                     return {node, i};
             return {nullptr, -1};
         }
-        // internal: traverse all children (could be optimized with bounds)
+
         for (auto &e : node->entries)
         {
             if (e.child)
@@ -276,14 +266,12 @@ private:
         return {nullptr, -1};
     }
 
-    // ------------------- INSERT -------------------
+    // ------------------- Inserção -------------------
 
     void insertRecursive(const shared_ptr<Node> &node, const MTreeObject &obj)
     {
-    // Debug desativado
         if (node->isLeaf)
         {
-            // create leaf entry
             Entry ent;
             ent.routingObj = obj;
             ent.child = nullptr;
@@ -296,32 +284,32 @@ private:
             }
             else
             {
-                // update ancestors' covering radii
                 updateCoveringRadiiUpwards(node, obj);
             }
             return;
         }
 
-        // internal node: choose subtree
+        // Nó interno: escolher subárvore
         size_t bestIdx = chooseSubtree(node, obj);
         assert(bestIdx < node->entries.size());
         auto child = node->entries[bestIdx].child;
         insertRecursive(child, obj); // splits e propagação já tratados recursivamente
 
-        // ensure covering radius of the chosen entry updated
+        // Atualiza raio de cobertura da entrada escolhida (se ainda apontar para o mesmo filho)
         // O filho pode ter sido dividido e o entry original removido.
-        // Em vez de acessar diretamente pelo índice salvo, buscamos o entry que aponta para 'child'.
-        for (auto &ent : node->entries) {
-            if (ent.child == child) {
+        // Em vez de acessar diretamente pelo índice salvo, buscamos o entry que aponta para child.
+        for (auto &ent : node->entries)
+        {
+            if (ent.child == child)
+            {
                 // debug desativado
                 ent.radius = computeCoveringRadius(ent);
                 break;
             }
         }
-    // debug desativado
     }
 
-    // choose subtree entry index minimizing increase in covering radius
+    // Escolhe subarvore minimizando o aumento do raio de cobertura
     size_t chooseSubtree(const shared_ptr<Node> &node, const MTreeObject &obj)
     {
         float bestInc = numeric_limits<float>::infinity();
@@ -335,7 +323,6 @@ private:
             float inc = 0.0f;
             if (dist > e.radius)
                 inc = dist - e.radius;
-            // pick minimal increase, tie-break by smaller radius then smaller dist
             if (inc < bestInc ||
                 (fabs(inc - bestInc) < 1e-6 && (e.radius < node->entries[bestIdx].radius ||
                                                 (fabs(e.radius - node->entries[bestIdx].radius) < 1e-6 && dist < bestDist))))
@@ -348,7 +335,7 @@ private:
         return bestIdx;
     }
 
-    // compute covering radius for an entry (max distance between routingObj and all objects in child subtree)
+    // Raio de cobertura para uma entrada
     float computeCoveringRadius(const Entry &e)
     {
         if (!e.child)
@@ -363,7 +350,6 @@ private:
         {
             for (auto &ent : node->entries)
             {
-                // debug desativado
                 float d = safe_dist(pivot, ent.routingObj);
                 if (d > maxD)
                     maxD = d;
@@ -374,9 +360,7 @@ private:
         {
             for (auto &ent : node->entries)
             {
-                // debug desativado
-                // distance from pivot to child's routingObj plus child's radius may give upper bound,
-                // but here we compute exact by exploring downwards for correctness.
+                // Aproximação pelo pivô do filho + raio do filho (limite superior)
                 float d = safe_dist(pivot, ent.routingObj);
                 if (d + ent.radius > maxD)
                     maxD = d + ent.radius;
@@ -387,7 +371,7 @@ private:
 
     float computeCoveringRadius(const shared_ptr<Node> &node)
     {
-        // heuristic: take first entry as pivot
+        // heuristica: pega o primeiro entry como pivô
         if (!node)
             return 0.0f;
         if (node->entries.empty())
@@ -396,13 +380,13 @@ private:
         return computeCoveringRadius(node, pivot);
     }
 
-    // update covering radii up the parent chain to accommodate object obj
+    // Atualiza raios na cadeia de ancestrais para acomodar obj
     void updateCoveringRadiiUpwards(const shared_ptr<Node> &node, const MTreeObject &obj)
     {
         auto cur = node;
         while (auto p = cur->parent.lock())
         {
-            // find which entry in parent points to cur
+            // encontra qual entry no pai aponta para cur
             for (auto &ent : p->entries)
             {
                 if (ent.child && ent.child == cur)
@@ -417,16 +401,16 @@ private:
         }
     }
 
-    // ------------------- OVERFLOW / SPLIT -------------------
+    // ------------------- Overflow / Split -------------------
 
     void handleOverflow(const shared_ptr<Node> &node)
     {
-        // split node into two nodes; if node is root, create new root
+        // Divide o nó em dois; se for a raiz, cria nova raiz
         auto [n1, n2] = splitNode(node);
 
         if (node == root)
         {
-            // new root
+            // nova raiz
             auto newRoot = make_shared<Node>(false);
             Entry e1, e2;
             e1.routingObj = n1->entries[0].routingObj;
@@ -443,10 +427,10 @@ private:
             return;
         }
 
-        // replace node in its parent by two entries pointing to n1 and n2
+        // Substitui a entrada antiga do pai por duas novas (n1 e n2)
         auto parent = node->parent.lock();
         assert(parent);
-        // find index of node in parent
+        // encontra índice do node no pai
         int idx = -1;
         for (int i = 0; i < (int)parent->entries.size(); ++i)
             if (parent->entries[i].child == node)
@@ -456,7 +440,7 @@ private:
             }
         assert(idx != -1);
 
-        // remove the old entry and insert two new
+        // remove a entrada antiga e insere duas novas
         parent->entries.erase(parent->entries.begin() + idx);
 
         Entry e1, e2;
@@ -469,22 +453,16 @@ private:
         n1->parent = parent;
         n2->parent = parent;
 
-    // insert novas entradas
-    parent->entries.push_back(e1);
-    parent->entries.push_back(e2);
+        // insert novas entradas
+        parent->entries.push_back(e1);
+        parent->entries.push_back(e2);
 
-#ifdef MTREE_RECALC_PARENT_AFTER_SPLIT
-    // Recalcula todos os raios do parent para consistência total (custo extra)
-    for (auto &ent : parent->entries)
-        ent.radius = computeCoveringRadius(ent);
-#endif
-
-        // if parent now overflow, handle recursively
+        // Se o pai estourar, divide recursivamente
         if (parent->entries.size() > M)
             handleOverflow(parent);
     }
 
-    // split node: choose two promoted routing objects and partition entries
+    // Split: escolhe par de pivôs e particiona as entradas
     pair<shared_ptr<Node>, shared_ptr<Node>> splitNode(const shared_ptr<Node> &node)
     {
         // Coleta todas as entradas do nó antigo
@@ -493,7 +471,7 @@ private:
         assert(n >= 2);
         assert(n == M + 1 || n > M); // overflow esperado
 
-        // (1) Escolhe par mais distante (farthest-pair)
+        // Par mais distante
         float maxD = -1.0f;
         size_t a = 0, b = 1;
 
@@ -511,41 +489,40 @@ private:
             }
         }
 
-        // (2) Cria os novos nós (preservando leafness)
-    auto nodeA = make_shared<Node>(node->isLeaf);
-    auto nodeB = make_shared<Node>(node->isLeaf);
-    NODE_INSTANCES.fetch_add(2, memory_order_relaxed);
-    SPLIT_COUNT.fetch_add(1, memory_order_relaxed);
-    nodeA->entries.reserve(n); // reserva máxima possível
-    nodeB->entries.reserve(n);
+        // Cria novos nós (mantém tipo folha/interno)
+        auto nodeA = make_shared<Node>(node->isLeaf);
+        auto nodeB = make_shared<Node>(node->isLeaf);
+        NODE_INSTANCES.fetch_add(2, memory_order_relaxed);
+        SPLIT_COUNT.fetch_add(1, memory_order_relaxed);
+        nodeA->entries.reserve(n); // reserva máxima possível
+        nodeB->entries.reserve(n);
 
-        // Copia o parent para os novos nós
+        // Copia o ponteiro para o pai
         auto parent = node->parent.lock();
         nodeA->parent = parent;
         nodeB->parent = parent;
 
-        // (3) Seeds promovidos
-    Entry seedA = std::move(all[a]);
-    Entry seedB = std::move(all[b]);
+        // Seeds promovidos
+        Entry seedA = std::move(all[a]);
+        Entry seedB = std::move(all[b]);
 
-        // Seeds podem ser entradas de folha ou não.
-        // Se não for folha, preserva filho corretamente.
+        // Seeds podem ser de folha ou internas; preserva filhos quando necessário
         if (node->isLeaf)
         {
             seedA.child = nullptr;
             seedB.child = nullptr;
         }
 
-        // Inserir seeds como primeiras entradas
-    nodeA->entries.push_back(std::move(seedA));
-    nodeB->entries.push_back(std::move(seedB));
+        // Insere seeds
+        nodeA->entries.push_back(std::move(seedA));
+        nodeB->entries.push_back(std::move(seedB));
 
-        // (4) Marcar entradas já usadas
+        // Marca entradas já usadas
         vector<bool> assigned(n, false);
         assigned[a] = true;
         assigned[b] = true;
 
-        // (5) Distribuição das outras entradas
+        // Distribui demais entradas
         for (size_t i = 0; i < n; ++i)
         {
             if (assigned[i])
@@ -562,7 +539,7 @@ private:
             assigned[i] = true;
         }
 
-        // (6) Ensure min-fill (corrige desbalanceamento)
+        // Garante preenchimento mínimo
         if (nodeA->entries.size() < m)
         {
             moveEntriesToFill(nodeB, nodeA, m - nodeA->entries.size(), nodeA->entries[0].routingObj);
@@ -572,13 +549,7 @@ private:
             moveEntriesToFill(nodeA, nodeB, m - nodeB->entries.size(), nodeB->entries[0].routingObj);
         }
 
-        // Log básico de split (pode ficar verboso se muitos splits)
-    // log de split desativado
-
-        // Validação rápida dos hist sizes (invariantes)
-        // validação desativada
-
-        // (7) Se o nó não for folha, atualiza parents dos filhos
+        // Atualiza parent nos filhos das entradas internas
         if (!node->isLeaf)
         {
             for (auto &e : nodeA->entries)
@@ -590,14 +561,14 @@ private:
                     e.child->parent = nodeB;
         }
 
-        // (8) Invalida o nó antigo para evitar lixo/corrupção
+        // Invalida o nó antigo
         node->entries.clear();
 
         // Retorna os dois novos nós
         return {nodeA, nodeB};
     }
 
-    // move count entries from src to dst to ensure dst has required number; choose entries maximizing distance from dstPivot
+    // Move 'count' entradas de src para dst (escolhendo as mais distantes do pivô de dst)
     void moveEntriesToFill(shared_ptr<Node> &src, shared_ptr<Node> &dst, size_t count, const MTreeObject &dstPivot)
     {
         // compute distances of src entries to dstPivot and sort descending
@@ -628,7 +599,7 @@ private:
             dst->entries.push_back(std::move(src->entries[it.idx]));
             moved++;
         }
-        // remove moved entries from src (by rebuilding vector except moved indices)
+        // Remove entradas movidas de src reconstruindo o vetor
         vector<Entry> remaining;
         vector<bool> movedIdx(src->entries.size(), false);
         for (size_t i = 0; i < count && i < items.size(); ++i)
@@ -638,11 +609,10 @@ private:
                 remaining.push_back(std::move(src->entries[i]));
         src->entries.swap(remaining);
 
-        // Verificação pós-move
-        // pós-move debug desativado
+        // Verificação pos-move
     }
 
-    // ------------------- RANGE -------------------
+    // ------------------- Range Query -------------------
 
     void rangeRecursive(const shared_ptr<Node> &node, const MTreeObject &query, float radius, vector<MTreeObject> &out)
     {
@@ -664,20 +634,20 @@ private:
             float dqp = safe_dist(query, e.routingObj);
             if (dqp <= radius + e.radius)
             {
-                // sub-tree may contain results
+                // Subarvore pode conter resultados
                 rangeRecursive(e.child, query, radius, out);
             }
         }
     }
 
-    // ------------------- UNDERFLOW / REMOVE -------------------
+    // ------------------- Underflow / Remoção -------------------
 
-    // if node underflows (entries < m) and not root, remove node from parent and reinsert its entries into tree
+    // Se underflow (entries < m) e não for raiz remove do pai e reinsere
     void handleUnderflow(const shared_ptr<Node> &node)
     {
         if (node == root)
         {
-            // if root has only one child and is internal, make that child new root (height shrink)
+            // se a raiz tem apenas um filho e é interna, torna esse filho a nova raiz
             if (!root->isLeaf && root->entries.size() == 1 && root->entries[0].child)
             {
                 root = root->entries[0].child;
@@ -688,14 +658,14 @@ private:
 
         if (node->entries.size() >= m)
         {
-            // no underflow
+            // sem underflow
             return;
         }
 
-        // remove node from parent and collect its entries for reinsertion
+        // remove no do pai e coleta suas entradas para reinserção
         auto parent = node->parent.lock();
         assert(parent);
-        // find and erase parent's entry referencing node
+        // encontra e remove a entrada do pai que referencia o nó
         int idx = -1;
         for (int i = 0; i < (int)parent->entries.size(); ++i)
             if (parent->entries[i].child == node)
@@ -704,18 +674,18 @@ private:
                 break;
             }
         assert(idx != -1);
-        // remove the entry
+        // remove o entry
         parent->entries.erase(parent->entries.begin() + idx);
 
-        // collect all leaf objects under node (if internal, collect leaf descendants)
+        // coleta todos os objetos folha sob o nó (se interno, coleta descendentes folha)
         vector<MTreeObject> toReinsert;
         collectLeafObjects(node, toReinsert);
 
-        // reinsert them into tree starting at root
+        // reinsere-os na árvore começando pela raiz
         for (auto &obj : toReinsert)
             insert(obj);
 
-        // after removal maybe parent underflows too
+        // após remoção, talvez o pai também tenha underflow
         handleUnderflow(parent);
     }
 
@@ -734,7 +704,7 @@ private:
     }
 };
 
-// Definições inline dos membros estáticos (C++17 inline variable evita múltiplas definições)
+// Definições inline dos membros estáticos, C++17 inline variable evita múltiplas definições
 inline atomic<size_t> MTree::NODE_INSTANCES{0};
 inline atomic<size_t> MTree::SPLIT_COUNT{0};
 

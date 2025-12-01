@@ -10,25 +10,24 @@ using namespace std;
 // Contador de comparações usado pela M-Tree (definido em main.cpp)
 extern size_t MTREE_COMPARISONS;
 
-// Wrapper para armazenar no M-Tree
+// Objeto armazenado na M-Tree (descritor + metadados)
 struct MTreeObject {
     Descriptor desc;
-    int id;            // identificador da imagem / objeto
-    string filepath;  // opcional (caminho, etc.)
+    int id;            // identificador
+    string filepath;   // caminho da imagem (opcional)
 
     MTreeObject() = default;
     MTreeObject(int id_, const Descriptor& d, const string& m = "")
         : desc(d), id(id_), filepath(m) {}
 };
 
-// distância circular entre valores em [0,1]
+// Distância circular entre valores em [0,1]
 inline float circular_dist(float a, float b) {
     float diff = fabs(a - b);
     return min(diff, 1.0f - diff);
 }
 
-// função de distância combinada (métrica usada pela M-Tree)
-// Combina Chi^2(hist), distância circular do hue médio (muH) e diferença de saturação média (muS).
+// Métrica da M-Tree: Chi^2(hist) + distância circular de Hue + diferença de Saturação
 inline float mtree_distance(const MTreeObject& A, const MTreeObject& B) {
     // Incrementa contador global de comparações
     ++MTREE_COMPARISONS;
